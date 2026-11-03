@@ -6,3 +6,5 @@ argument-hint: "[off]"
 The ConsoleX plugin has already run this check and added its result (or the reason it could not run) to your context.
 
 Tell the user in a few lines: the verdict, each failed item with its reason, anything that needs their review or confirmation, and the run link. Do not change any files unless the user asks you to.
+
+If no ConsoleX result is in your context, the plugin's hooks did not run here (claude.ai chat does not run plugin hooks; ConsoleX works in Claude Code and Cowork). Tell the user that in one line and do nothing else.

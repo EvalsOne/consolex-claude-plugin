@@ -8,8 +8,10 @@ description: How ConsoleX tasks work in Claude Code - connecting, adding tasks, 
 ## Setting up (the user does this, once per computer)
 
 - `/consolex:login` connects this computer: the browser opens, the user approves the code in ConsoleX, and the plugin saves the connection by itself. A development or self-hosted ConsoleX takes its API address: `/consolex:login https://…`.
-- `/consolex:tasks` lists the user's ConsoleX tasks; `/consolex:add <words from a task name>` (or a ConsoleX task link) adds one as a `/cx-…` Skill, together with the ConsoleX Skills the task uses; the task Skill names them under "Skills for this task", so load those when a step needs them. `/consolex:logout` disconnects the computer.
+- `/consolex:add` with no words lists the user's ConsoleX tasks (`/consolex:tasks [words]` searches them); `/consolex:add <words from a task name>` (or a ConsoleX task link) adds one as a `/cx-…` Skill, together with the ConsoleX Skills the task uses; the task Skill names them under "Skills for this task", so load those when a step needs them. `/consolex:remove <task>` takes an added task off this computer (the task stays in ConsoleX). `/consolex:logout` disconnects the computer.
+- When the user asks in plain words for one of these ("add 小语评球", "remove the weekly note task"), run the command for them with the Skill tool: the plugin answers it the same as a typed one. `/consolex:logout` and `/consolex:save` are the exceptions: only the user types them.
 - `/consolex:save [task name]` sends the current session (the user's messages, the final reply and the tool records, keys masked) to ConsoleX as a task draft; the user reviews and saves it there, and this result becomes the task's first run. Only the user runs it; never suggest it in place of finishing the work, and never send anything to ConsoleX yourself.
+- `/consolex:schedule <task> <when>` (Claude desktop app) creates or updates a scheduled task that runs an added task. When the user asks for one in plain words, or no ConsoleX result came with the command, call the `consolex_schedule` tool and pass on the prompts it gives. Its prompt only names the task and the folder: rules about the work (what to publish, whether to wait, what to do after a failed check) belong in the task in ConsoleX, never in that prompt. A task runs from one place: when the plugin says it already has a schedule in ConsoleX or on another computer, tell the user and create nothing until that one is off (pausing or deleting the ones on this computer stays fine). Pause, change or delete scheduled tasks only through the desktop app's scheduled-tasks tools, so ConsoleX hears about it.
 - These commands are handled by the plugin. Never edit `~/.consolex/credentials.json`, never ask the user for a token, and never create task Skills by hand.
 
 ## Working on a task
@@ -45,6 +47,11 @@ When a check fails or needs the owner's review, the turn continues once with a C
 2. Tell the owner the result in one short message: each item with its reason, and the run link.
 3. Ask whether to revise for these items: with AskUserQuestion when you have it (options "Revise these items" / "Keep as is"; items to confirm go into the same call as further questions), otherwise in one line, and stop.
 4. Only after the owner says to revise: fix those items in the deliverable itself and deliver again with the delivery section. ConsoleX checks it again and the owner decides again.
+
+Two exceptions, each announced in the plugin's own ConsoleX message; follow that message:
+
+- **The task lets you fix failed rule checks.** The message lists the rule items: fix only what they concern and deliver again (at most twice). AI-judged items it names stay with the owner; do not revise for them.
+- **Unattended run** (a scheduled task or `consolex run --headless`): nobody can answer. Never use AskUserQuestion or wait for a confirmation; put open decisions under "Needs your confirmation" and deliver. When a check fails, write the result down in one short message and stop.
 
 Never invent facts, sources or approvals to pass a check, and do not add content only because a check named it; if a failed item asks for something the method never mentioned, say so to the owner. If an item needs the owner's decision or information you do not have, put it under "Needs your confirmation". A delivery made without the owner's go-ahead is not checked.
 

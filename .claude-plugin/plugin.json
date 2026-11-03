@@ -1,0 +1,26 @@
+{
+  "name": "consolex",
+  "displayName": "ConsoleX",
+  "version": "0.16.0",
+  "description": "Connect once, add ConsoleX tasks as Skills, save sessions as tasks, and check each delivery against the task's saved standard before Claude finishes.",
+  "author": {
+    "name": "ConsoleX",
+    "url": "https://consolex.ai"
+  },
+  "homepage": "https://consolex.ai",
+  "repository": "https://github.com/EvalsOne/consolex-claude-plugin",
+  "license": "MIT",
+  "keywords": [
+    "consolex",
+    "tasks",
+    "checks",
+    "evaluation",
+    "skills",
+    "acceptance"
+  ],
+  "documentationUrl": "https://github.com/EvalsOne/consolex-claude-plugin#readme",
+  "supportUrl": "https://github.com/EvalsOne/consolex-claude-plugin/issues",
+  "privacyPolicyUrl": "https://consolex.ai/legal/privacy",
+  "termsOfServiceUrl": "https://consolex.ai/legal/terms",
+  "icon": "./icon.png"
+}
