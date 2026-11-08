@@ -1,6 +1,6 @@
 ---
-description: Do a ConsoleX task here, in this session, without adding it as a Skill - the delivery is checked like an added task's. Give words from its name or its ConsoleX link, then optionally what you want this time after " -- ".
-argument-hint: "<words from the task name | ConsoleX task link> [-- what you want this time]"
+description: Do a ConsoleX task here, in this session, without adding it as a Skill - the delivery is checked like an added task's. Give words from its name, its UUID or its ConsoleX link, then optionally what you want this time after " -- ".
+argument-hint: "<words from the task name | task UUID | ConsoleX task link> [-- what you want this time]"
 ---
 
 The ConsoleX plugin has already looked the task up and, when exactly one task matched, loaded it into your context: its method, its Skills and its ConsoleX tools.

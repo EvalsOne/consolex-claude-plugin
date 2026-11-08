@@ -4,9 +4,11 @@
       {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 200}]}
     ],
     "PreToolUse": [
-      {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]}
+      {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},
+      {"matcher": "^mcp__(plugin_consolex_consolex__consolex_run_task_tool|consolex__(?!consolex_checkpoint$))", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]}
     ],
     "PostToolUse": [
+      {"matcher": "Write|Edit|MultiEdit|Bash", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},
       {"matcher": "Skill", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 200}]},
       {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},
       {"matcher": "mcp__scheduled-tasks__create_scheduled_task|mcp__scheduled-tasks__update_scheduled_task|mcp__scheduled-tasks__delete_scheduled_task", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 15}]}

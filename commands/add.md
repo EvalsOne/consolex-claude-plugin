@@ -1,6 +1,6 @@
 ---
-description: Add a ConsoleX task to Claude Code as a /cx-… Skill. Give words from the task name or paste its ConsoleX link; with nothing, it lists your tasks.
-argument-hint: "[words from a task name | ConsoleX task link]"
+description: Add a ConsoleX task to Claude Code as a /cx-… Skill. Give words from the task name, its UUID or paste its ConsoleX link; with nothing, it lists your tasks.
+argument-hint: "[words from a task name | task UUID | ConsoleX task link]"
 ---
 
 The ConsoleX plugin has already looked the task up (and installed its Skill when exactly one task matched) and added the result to your context.

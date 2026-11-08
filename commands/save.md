@@ -1,11 +1,11 @@
 ---
-description: Save this Claude Code session as a ConsoleX task draft - your messages, the final reply and the tool records go to ConsoleX, where you review the method and checks and save it.
+description: Save this Claude Code session as a ConsoleX task - the method stays in one skill here, ConsoleX keeps the delivery goal, run rules and checks. You review the draft in ConsoleX and save it there.
 argument-hint: "[task name]"
 disable-model-invocation: true
 ---
 
-The ConsoleX plugin has already sent this session to ConsoleX as a task draft (or found why it could not) and added the result to your context.
+The ConsoleX plugin has prepared this save and added its steps to your context (a note that starts with "ConsoleX: the user ran /consolex:save"). Nothing has been sent yet.
 
-Tell the user what it says in two or three lines: what was sent and the link to review the draft. Do not run any commands, do not create files and do not save anything else yourself.
+Follow those steps exactly: choose or create the task's main skill, ask the user once before writing new requirements into an existing skill, select the actual deliverable from the captured candidates (not a task list or status reply), then call the `consolex_save` tool with the save id and result_id the note gives (if this session has no such tool, run the command the note gives instead), and tell the user in two or three lines what it says, with its review link. Explain that the review link opens in the external browser (or should be copied there), and saving only checks the selected result if the owner opts in. Do not send anything to ConsoleX any other way.
 
-If no ConsoleX result is in your context, the plugin's hooks did not run here (claude.ai chat does not run plugin hooks; ConsoleX works in Claude Code and Cowork). Tell the user that in one line and do nothing else.
+If the note says ConsoleX is not connected or there is nothing to save, tell the user that in one line and do nothing else. If no ConsoleX result is in your context, the plugin's hooks did not run here (claude.ai chat does not run plugin hooks; ConsoleX works in Claude Code and Cowork). Tell the user that in one line and do nothing else.

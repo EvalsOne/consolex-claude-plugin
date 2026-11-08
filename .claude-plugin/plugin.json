@@ -1,7 +1,7 @@
 {
   "name": "consolex",
   "displayName": "ConsoleX",
-  "version": "0.16.0",
+  "version": "0.20.6",
   "description": "Connect once, add ConsoleX tasks as Skills, save sessions as tasks, and check each delivery against the task's saved standard before Claude finishes.",
   "author": {
     "name": "ConsoleX",
