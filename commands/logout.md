@@ -1,5 +1,6 @@
 ---
-description: Disconnect this computer from ConsoleX and remove it from the account's connected devices.
+description: Disconnect this computer from ConsoleX and remove it from the account's connected devices. Optional argument - which ConsoleX address to disconnect, or all.
+argument-hint: "[api address | all]"
 disable-model-invocation: true
 ---
 

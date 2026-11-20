@@ -5,7 +5,7 @@
     ],
     "PreToolUse": [
       {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},
-      {"matcher": "^mcp__(plugin_consolex_consolex__consolex_run_task_tool|consolex__(?!consolex_checkpoint$))", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]}
+      {"matcher": "^mcp__(plugin_consolex_consolex__(consolex_run_task_tool|consolex_start_task)|consolex__(?!consolex_checkpoint$))", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]}
     ],
     "PostToolUse": [
       {"matcher": "Write|Edit|MultiEdit|Bash", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},

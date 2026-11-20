@@ -36,14 +36,15 @@ PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
 LIST_TIMEOUT = 20
 CALL_TIMEOUT = 330  # a slow tool (search, browser) may run for minutes on the server
 
-TASK_ARGUMENT = {'type': 'string', 'description': 'The ConsoleX task Skill, like "cx-weekly-note" (the ConsoleX note '
-                                                  'names it when the task starts).'}
+TASK_ARGUMENT = {'type': 'string', 'description': 'The task reference given in the ConsoleX activation note, such as '
+                                                  '"cx-weekly-note" or the private reference of a task started without installation.'}
 CHECKPOINT_TOOL = {'name': core.CHECKPOINT_TOOL,
     'description': 'Hand in the COMPLETE text of a stage of a staged task (operation submit) and read its check result, or read '
-                   'where the stages stand (operation status). In a staged task the reply is the verdict: carry on, or fix '
-                   'what did not pass and hand the stage in again; nothing waits for the owner. A task with a single required '
-                   'stage before ConsoleX TTS works as before: a waiting result requires owner review in ConsoleX and must not '
-                   'be bypassed through other tools. Use the execution_id from the task activation note across turns.',
+                   'where the stages stand (operation status). ONLY call this tool when the ConsoleX task activation note '
+                   'explicitly lists stages and provides an execution_id; never call it for tasks without stage checks. '
+                   'In a staged task the reply is the verdict: carry on, or fix '
+                   'what did not pass and hand the stage in again; nothing waits for the owner. '
+                   'Use the execution_id from the task activation note across turns.',
     'inputSchema': {'type': 'object', 'additionalProperties': False, 'required': ['task', 'execution_id', 'operation'],
         'properties': {'task': TASK_ARGUMENT, 'execution_id': {'type': 'string'},
                        'operation': {'type': 'string', 'enum': ['submit', 'status']},
@@ -81,6 +82,8 @@ SAVE_TOOL = {
     'inputSchema': {'type': 'object', 'properties': {
         'save_id': {'type': 'string', 'description': 'The save request id from the ConsoleX note of /consolex:save.'},
         'skill_path': {'type': 'string', 'description': "The absolute path of the main skill's folder (the one with its SKILL.md)."},
+        'acceptance_mode': {'type': 'string', 'enum': ['checklist', 'open_final'],
+                            'description': "The owner's preferred final acceptance mode, if stated. Editable on the review page."},
         'result_id': {'type': 'string', 'description': 'The captured candidate id containing the actual deliverable, not a status or task list. Omit if uncertain; the owner reviews it before opting into a check.'},
         'rules': {'type': 'string', 'description': 'Only the rules the user stated about waiting for their confirmation, '
                                                    'publishing or sending, and what to do when a check fails, in their '
@@ -90,8 +93,8 @@ SAVE_TOOL = {
 # Claude Code only: a schedule is a Claude desktop scheduled task.
 SCHEDULE_TOOL = {
     'name': core.SCHEDULE_TOOL,
-    'description': 'Set up or change a scheduled run of a ConsoleX task, in the Claude desktop app (a task not yet added '
-                   'on this computer is added first). Use it whenever the user wants a ConsoleX task to run by itself at set times, or to change, add, '
+    'description': 'Set up or change a scheduled run of a ConsoleX task in the Claude desktop app using its UUID. '
+                   'No task Skill installation is needed. Use it whenever the user wants a ConsoleX task to run by itself at set times, or to change, add, '
                    'pause or stop such a schedule, with or without /consolex:schedule ("run 小语评球 every weekday at '
                    '8:30"). It returns the scheduled tasks that already run the task and the exact taskId, title, '
                    'description and prompt to pass to the scheduled-tasks tools: you only turn the time into a cron '
@@ -108,8 +111,8 @@ SCHEDULE_TOOL = {
 # in the chat's folder, so the agent names it.
 CODEX_SCHEDULE_TOOL = {
     'name': core.SCHEDULE_TOOL,
-    'description': 'Set up or change a scheduled run of a ConsoleX task, as a scheduled task in the Codex app (a task '
-                   'not yet added on this computer is added first). Use it whenever the user wants a ConsoleX task to run by itself at set times, or to '
+    'description': 'Set up or change a scheduled run of a ConsoleX task, as a scheduled task in the Codex app. '
+                   'It does not install the task as a Skill. Use it whenever the user wants a ConsoleX task to run by itself at set times, or to '
                    'change, add, pause or stop such a schedule, with or without $consolex-schedule ("run 小语评球 every '
                    'weekday at 8:30"). It returns the scheduled tasks that already run the task and the exact name and '
                    'prompt to pass to the Codex app\'s automation_update tool: you only turn the time into an RRULE. '
@@ -133,6 +136,28 @@ COMMAND_TOOL = {
         'arguments': {'type': 'string', 'description': 'What follows the command, as the user would type it: words '
                                                        'from a task name, a task UUID or ConsoleX task link, or nothing.'}},
         'required': ['command']}}
+
+START_TASK_TOOL = {
+    'name': core.START_TASK_TOOL,
+    'description': 'Start a ConsoleX task in THIS chat and return its latest approved method and activation '
+                   'receipt. Call before doing a scheduled task, including when its instructions arrived as tool '
+                   'output. Continue only when status is started; reading a Skill is not activation. '
+                   'Requires the installed, trusted ConsoleX hooks; never supply another chat\'s session id.',
+    'inputSchema': {'type': 'object', 'additionalProperties': False, 'required': ['task'], 'properties': {
+        'task': {'type': 'string', 'description': 'ConsoleX task UUID (preferred), cx- Skill name, or task name.'},
+        'request': {'type': 'string', 'description': 'Only the user\'s additional request for this run, if any.'},
+        'unattended': {'type': 'boolean', 'description': 'True for a scheduled run with nobody present to answer.'},
+        'schedule_id': {'type': 'string', 'description': 'The scheduled task ID supplied by the scheduler, if present.'},
+        '_activation_context': {'type': 'string', 'description': 'Reserved for the ConsoleX hook. Omit this field.'}}}}
+
+CLAUDE_START_TASK_TOOL = {
+    **START_TASK_TOOL,
+    'description': START_TASK_TOOL['description'] + ' Generate a fresh 32-character lowercase hexadecimal activation_nonce for each call.',
+    'inputSchema': {**START_TASK_TOOL['inputSchema'], 'required': ['task', 'activation_nonce'],
+                    'properties': {**{k: v for k, v in START_TASK_TOOL['inputSchema']['properties'].items()
+                                      if k != '_activation_context'},
+                                   'activation_nonce': {'type': 'string', 'pattern': '^[a-f0-9]{32}$',
+                                       'description': 'A fresh 32-character lowercase hexadecimal identifier for this call; never reuse a pending call.'}}}}
 
 
 class ToolServer:
@@ -163,8 +188,9 @@ class ToolServer:
                 return []
             runtime = core.client(self.env)
             if runtime == 'claude_code':
-                return GATEWAY_TOOLS + [SCHEDULE_TOOL, SAVE_TOOL, CHECKPOINT_TOOL]
-            return (GATEWAY_TOOLS + ([CODEX_SCHEDULE_TOOL, CHECKPOINT_TOOL] if runtime == 'codex' else [])
+                return GATEWAY_TOOLS + [SCHEDULE_TOOL, SAVE_TOOL, CHECKPOINT_TOOL, CLAUDE_START_TASK_TOOL]
+            return (GATEWAY_TOOLS + ([CODEX_SCHEDULE_TOOL, CHECKPOINT_TOOL, START_TASK_TOOL] if runtime == 'codex' else
+                       [CHECKPOINT_TOOL, START_TASK_TOOL] if runtime == 'antigravity' else [])
                     + [COMMAND_TOOL, SAVE_TOOL])
         if self.tools is not None:
             return self.tools
@@ -199,16 +225,14 @@ class ToolServer:
             return self._checkpoint(arguments)
         arguments = dict(arguments)
         execution_id = arguments.pop('consolex_execution_id', None)
+        call_id = uuid.uuid4().hex
         status, body = self.http('POST', self._url('tools/call'), self.token, {
-            'session_id': self.session_id, 'session_named': self.session_named, 'call_id': uuid.uuid4().hex, 'tool': name,
+            'session_id': self.session_id, 'session_named': self.session_named, 'call_id': call_id, 'tool': name,
             'arguments': arguments, **({'execution_id': execution_id} if execution_id else {})}, timeout=CALL_TIMEOUT)
         if status != 200 or not body.get('succ'):
             return 'ConsoleX could not run %s: %s' % (name, body.get('error_msg') or ('HTTP %s' % status if status else 'unreachable')), True
+        core._record_mcp_call(self.env, self.task_uuid, self.session_id, call_id, 'mcp__consolex__' + name, arguments)
         output, is_error = str(body.get('output') or ''), bool(body.get('is_error'))
-        if is_error and body.get('invoked') is not True:
-            held = core.held_stage_call(output)
-            if held:
-                return core.held_stage_note(held), True  # a stage-bound action that is not ready: "not yet", not a failure
         return output, is_error
 
     def _checkpoint(self, arguments):
@@ -236,6 +260,14 @@ class ToolServer:
     def _gateway_call(self, name, arguments):
         if name not in {tool['name'] for tool in self.list_tools()}:
             return 'Unknown tool %s.' % name, True
+        if name == core.START_TASK_TOOL:
+            if core.client(self.env) == 'claude_code':
+                return core.claude_start_task_tool(self.env, arguments, http=self.http)
+            if core.client(self.env) in ('codex', 'antigravity'):
+                spec = importlib.util.spec_from_file_location('consolex_runtime', Path(__file__).with_name('runtime.py'))
+                runtime = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(runtime)
+                return runtime.start_task_tool(self.env, arguments, http=self.http, runtime=core.client(self.env))
         if name == core.RENAME_SKILL_TOOL:
             new, problem = core.rename_task_skill(self.env, arguments.get('skill'), arguments.get('name'))
             if problem:
@@ -248,7 +280,7 @@ class ToolServer:
         if name == core.SAVE_TOOL:
             text, is_error = core.save_session(self.env, arguments.get('save_id'), arguments.get('skill_path'),
                                                arguments.get('rules'), arguments.get('name'), http=self.http,
-                                               result_id=arguments.get('result_id'))
+                                               result_id=arguments.get('result_id'), acceptance_mode=arguments.get('acceptance_mode'))
             return core.native_text(text, core.client(self.env)), is_error
         if name == core.COMMAND_TOOL:
             return core.command_for_agent(self.env, arguments.get('command'), arguments.get('arguments'), self.session_id,
