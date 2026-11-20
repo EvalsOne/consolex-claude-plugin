@@ -13,6 +13,8 @@ Two modes:
   words, or a /consolex:schedule that Claude started itself (no hook runs then), comes out the same.
   `consolex_save` is step two of /consolex:save: it sends the session prepared by the owner's typed command, with the
   task's main skill read from disk (it needs that command's one-time save request).
+  `consolex_list_profiles` and `consolex_get_profile` read the owner's client and product profiles (read-only; never
+  in an isolated run).
 
 ConsoleX runs each call with the owner's keys and connections, bills it like a hosted run and records it. Keys,
 OAuth tokens and Skill secrets never reach this computer; the device token is read from the shared ConsoleX
@@ -137,6 +139,35 @@ COMMAND_TOOL = {
                                                        'from a task name, a task UUID or ConsoleX task link, or nothing.'}},
         'required': ['command']}}
 
+# Every runtime's ordinary session (not an isolated run, which gets its task's frozen profile with the method): the
+# owner's client and product profiles, read-only. Nothing here can change a profile. The same text in DSH's native
+# tools (integrations/deepseek_harness/index.mjs).
+READ_ONLY = {'readOnlyHint': True, 'destructiveHint': False, 'idempotentHint': True, 'openWorldHint': False}
+PROFILE_TOOLS = [
+    {'name': core.LIST_PROFILES_TOOL,
+     'description': "List the user's ConsoleX profiles: client profiles (a client's voice, rules, facts and topics to "
+                    "avoid) and product profiles (a product's public facts and private wording rules), each with its "
+                    'uuid, name, version and how many tasks use it. Read-only. Use it when the user mentions a ConsoleX '
+                    'profile, a client or a product they keep in ConsoleX, then read the one that fits with %s.'
+                    % core.GET_PROFILE_TOOL,
+     'annotations': READ_ONLY,
+     'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+    {'name': core.GET_PROFILE_TOOL,
+     'description': 'Read one ConsoleX profile as it is now: every field, its version, the tasks that use it and how '
+                    'to use it when writing. Read-only: a profile is changed by the user in ConsoleX, never from here. '
+                    'Fields marked private (a product\'s notes, words_use, words_avoid, do_not_claim) guide your '
+                    'writing and are never quoted or published.',
+     'annotations': READ_ONLY,
+     'inputSchema': {'type': 'object', 'additionalProperties': False, 'required': ['profile'], 'properties': {
+         'profile': {'type': 'string', 'description': 'The profile uuid from %s, or the profile\'s ConsoleX link.'
+                                                      % core.LIST_PROFILES_TOOL},
+         'kind': {'type': 'string', 'enum': ['client', 'product'],
+                  'description': 'Which kind it is, as %s shows. Optional.' % core.LIST_PROFILES_TOOL},
+         'include_samples': {'type': 'boolean', 'description': "A client profile's writing samples in full (otherwise "
+                                                                'only their first words). Set it when you write in '
+                                                                "that client's voice."}}}},
+]
+
 START_TASK_TOOL = {
     'name': core.START_TASK_TOOL,
     'description': 'Start a ConsoleX task in THIS chat and return its latest approved method and activation '
@@ -188,10 +219,10 @@ class ToolServer:
                 return []
             runtime = core.client(self.env)
             if runtime == 'claude_code':
-                return GATEWAY_TOOLS + [SCHEDULE_TOOL, SAVE_TOOL, CHECKPOINT_TOOL, CLAUDE_START_TASK_TOOL]
+                return GATEWAY_TOOLS + [SCHEDULE_TOOL, SAVE_TOOL, CHECKPOINT_TOOL, CLAUDE_START_TASK_TOOL] + PROFILE_TOOLS
             return (GATEWAY_TOOLS + ([CODEX_SCHEDULE_TOOL, CHECKPOINT_TOOL, START_TASK_TOOL] if runtime == 'codex' else
                        [CHECKPOINT_TOOL, START_TASK_TOOL] if runtime == 'antigravity' else [])
-                    + [COMMAND_TOOL, SAVE_TOOL])
+                    + [COMMAND_TOOL, SAVE_TOOL] + PROFILE_TOOLS)
         if self.tools is not None:
             return self.tools
         self.tools = []
@@ -296,6 +327,11 @@ class ToolServer:
             return core.native_text(problem or text, core.client(self.env)), bool(problem)
         if name == core.TASK_TOOLS_TOOL:
             return core.task_tools_reply(self.env, arguments.get('task'), http=self.http)
+        if name == core.LIST_PROFILES_TOOL:
+            return core.profiles_reply(self.env, http=self.http)
+        if name == core.GET_PROFILE_TOOL:
+            return core.profile_reply(self.env, arguments.get('profile'), arguments.get('kind'),
+                                      arguments.get('include_samples'), http=self.http)
         text, is_error = core.run_task_tool(self.env, arguments.get('task'), arguments.get('tool'), arguments.get('arguments'),
                                             self.session_id, http=self.http, timeout=CALL_TIMEOUT, execution_id=arguments.get('execution_id'),
                                             session_named=self.session_named)

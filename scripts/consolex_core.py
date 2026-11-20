@@ -2535,6 +2535,8 @@ START_TASK_TOOL = 'consolex_start_task'
 RUN_TASK_TOOL = 'consolex_run_task_tool'
 RENAME_SKILL_TOOL = 'consolex_rename_skill'  # gives an added task Skill an English name (see on_add)
 SCHEDULE_TOOL = 'consolex_schedule'  # a Claude desktop scheduled run of an added task (Claude Code only; see on_schedule)
+LIST_PROFILES_TOOL = 'consolex_list_profiles'  # the owner's client and product profiles (read-only; see profiles_reply)
+GET_PROFILE_TOOL = 'consolex_get_profile'  # one profile as it is now (read-only; see profile_reply)
 
 
 def _tool_label(item, zh):
@@ -2664,6 +2666,60 @@ def task_tools_reply(env, task, http=http_json, cwd=None):
                          "can't be called yet. If the work needs one, tell the user: open the task in ConsoleX, choose "
                          'Update on that server in its Config, then Save; then list the tools again.')
     return json.dumps(reply, ensure_ascii=False, indent=1), False
+
+
+PROFILE_UUID = re.compile(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+
+
+def _profiles_get(env, suffix='', query=None, http=http_json):
+    """(body, problem) of a read of the owner's profiles on the default ConsoleX server (no task is involved)."""
+    api_base = default_api_base(env)
+    token = connection_for(env, api_base)[0]
+    if not token:
+        return None, command_text('ConsoleX is not connected on this computer; run /consolex:login.', env)
+    url = api_base + '/api/operator/external/profiles' + suffix
+    if query:
+        url += '?' + urllib.parse.urlencode(query)
+    status, body = http('GET', url, token, timeout=20)
+    if status == 200 and body.get('succ'):
+        return body, ''
+    if status == 401:
+        return None, command_text('ConsoleX is not connected on this computer; run /consolex:login.', env)
+    if status == 404 and 'succ' not in body:
+        # A server from before profiles were readable here answers with the framework's own 404.
+        return None, 'This ConsoleX server does not let coding agents read profiles yet.'
+    return None, body.get('error_msg') or ('HTTP %s' % status if status else 'ConsoleX is unreachable')
+
+
+def profiles_reply(env, http=http_json):
+    """(text, is_error): what `consolex_list_profiles` answers, in every runtime."""
+    body, problem = _profiles_get(env, http=http)
+    if problem:
+        return problem, True
+    body.pop('succ', None)
+    if not body.get('client_profiles') and not body.get('product_profiles'):
+        return ('There are no client or product profiles in ConsoleX yet. The user creates them in ConsoleX on the '
+                'Profiles page%s.' % (' (%s)' % body['profiles_url'] if body.get('profiles_url') else '')), False
+    return json.dumps(body, ensure_ascii=False, indent=1), False
+
+
+def profile_reply(env, profile, kind=None, include_samples=False, http=http_json):
+    """(text, is_error): what `consolex_get_profile` answers. `profile` is a uuid or a ConsoleX profile link."""
+    text = str(profile or '').strip()
+    found = PROFILE_UUID.search(text)
+    if not found:
+        return 'Give profile: the uuid of one profile from %s (or its ConsoleX link).' % LIST_PROFILES_TOOL, True
+    kind = str(kind or '').strip().lower()
+    if not kind and '/profiles/products/' in text:
+        kind = 'product'
+    if kind and kind not in ('client', 'product'):
+        return 'kind is "client" or "product"; leave it out when unsure.', True
+    query = {**({'kind': kind} if kind else {}), **({'samples': 'full'} if include_samples in (True, 'true') else {})}
+    body, problem = _profiles_get(env, '/' + found.group(0).lower(), query, http=http)
+    if problem:
+        return problem, True
+    body.pop('succ', None)
+    return json.dumps(body, ensure_ascii=False, indent=1), False
 
 
 def _mcp_calls_path(env, task_uuid):
