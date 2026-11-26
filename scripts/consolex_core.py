@@ -383,10 +383,6 @@ def skill_roots(env, cwd):
             roots.append(os.path.join(parent, '.agents', 'skills'))
             parent = os.path.dirname(parent)
     roots.append(skills_dir(env))
-    # An uninstalled Codex task keeps its ConsoleX-managed supporting Skills
-    # privately, but its method may be the owner's existing personal Skill.
-    if env.get('CONSOLEX_OWNER_SKILLS_DIR'):
-        roots.append(env['CONSOLEX_OWNER_SKILLS_DIR'])
     return list(dict.fromkeys(roots))
 
 
@@ -2054,6 +2050,14 @@ def user_message(config, result, attempt, link, *, codex_receipt=False):
                     'ConsoleX ✗ attempt %s failed: %s; waiting for your decision%s') % (attempt, names, tail)
         return ('ConsoleX ✗ 第 %s 次交付未通过；等你决定要不要修改%s' if zh else
                 'ConsoleX ✗ attempt %s failed; waiting for your decision%s') % (attempt, tail)
+    if verdict == 'pending' and result.get('pending_reason') == 'standard_failed':
+        return ('ConsoleX：交付已记录，但这个任务的验收标准没能生成，检查在等它；到运行记录里重试生成标准，生成后自动检查这次交付%s' if zh else
+                'ConsoleX: delivery recorded, but the acceptance standard failed to generate, so the check is waiting for '
+                'it; retry the standard from the run page and this delivery is checked once it is ready%s') % tail
+    if verdict == 'pending' and result.get('pending_reason') == 'standard_drafting':
+        return ('ConsoleX：交付已记录，验收标准还在生成，生成后自动检查这次交付%s' if zh else
+                'ConsoleX: delivery recorded; the acceptance standard is still being drafted and this delivery is '
+                'checked once it is ready%s') % tail
     if verdict == 'pending':
         return ('ConsoleX：交付已记录，验收检查仍在进行中%s' if zh else 'ConsoleX: delivery recorded; acceptance check is still running%s') % tail
     if verdict == 'not_configured':
@@ -2220,16 +2224,18 @@ def activate(data, env, skill_dir, http=http_json):
     if method_skill and method_skill.get('skill'):
         # The method is a skill on this computer (the task's main skill); the task holds its goal and run rules.
         cwd = data.get('cwd') or os.getcwd()
-        folder = find_method_skill(method_skill['skill'], env, cwd)
+        owner_skills = env.get('CONSOLEX_OWNER_SKILLS_DIR')
+        method_env = {**env, 'CONSOLEX_SKILLS_DIR': owner_skills} if owner_skills else env
+        folder = find_method_skill(method_skill['skill'], method_env, cwd)
         if not folder:
             # Without its skill the agent has no method: it stops, and the run history says why (a scheduled run
             # would otherwise fail without a word). Someone there can have it copied from the other agent here.
             marker.pop('method_skill', None)
             session_event(config, env, data, marker, 'method_missing', http=http)
             save_marker(env, marker)
-            offer = None if alone else copy_skill_note(method_skill, env, cwd, zh)
-            return _context(data, _method_missing_note(method_skill, env, cwd, zh) + ('\n\n' + offer if offer else ''))
-        skill, _ = read_method_skill(folder, env, cwd)
+            offer = None if alone else copy_skill_note(method_skill, method_env, cwd, zh)
+            return _context(data, _method_missing_note(method_skill, method_env, cwd, zh) + ('\n\n' + offer if offer else ''))
+        skill, _ = read_method_skill(folder, method_env, cwd)
         marker['method_skill'] = {'name': method_skill['skill'], 'path': folder, 'hash': (skill or {}).get('hash'),
                                   'uploaded': [item for item in method_skill.get('uploaded') or [] if isinstance(item, str)][:20]}
         sync_method_skill(config, env, marker, http=http)
@@ -3339,6 +3345,9 @@ def end_turn(data, env, http=http_json):
 
 
 def on_session_end(data, env, http=http_json):
+    # A turn cut short (Esc, or the window closed) never reached Stop: its skill edits are sent now, before the
+    # session's marker ends.
+    flush_session_methods(data, env, http=http)
     session_state(data, env, 'end', http=http)
     return None
 
@@ -3819,29 +3828,55 @@ def sync_active_method(data, env, http=http_json):
 # Edits to a skill are noted while the agent works and synced once when its turn ends (Stop): several edits in one
 # turn make one version, and no hook waits on the network while the agent edits.
 _SKILL_PATH = re.compile(r'(/[^\s"\'`]*?/skills/[^/\s"\'`]+)')
+# A skill folder named relative to where the tool ran: `skills/<name>`, `./skills/<name>`, `.claude/skills/<name>`.
+_RELATIVE_SKILL_PATH = re.compile(r'(?:^|(?<=[\s"\'`=(]))((?:\.{1,2}/|[\w.@-]+/)*skills/[^/\s"\'`;|&)]+)')
+# The home folder as a command writes it: `~/…`, `$HOME/…`, `${HOME}/…`.
+_HOME_IN_TEXT = re.compile(r'(?<![\w$.~/-])~(?=/)|\$\{HOME\}|\$HOME\b')
+# File tools of an MCP server (the reference filesystem server and its look-alikes): their writes count as edits.
+_MCP_FILE_WRITE = re.compile(r'^mcp__.+__(write_file|edit_file|append_file|move_file|copy_file|create_directory)$')
+EDIT_TOOLS = ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash')
 MAX_NOTED_EDITS = 20
 NOTED_EDITS_TTL = 24 * 3600
+# Edits of a turn that never reached its end (interrupted, or the window closed) are synced by the next local check.
+STALE_NOTED_EDITS_SECONDS = 15 * 60
+# How often a prompt checks the skills of this computer's tasks for changes (hashing locally; uploads only a change).
+METHOD_CHECK_SECONDS = 5 * 60
 
 
 def _noted_edits_path(env):
     return os.path.join(consolex_home(env), 'method-edits-%s.json' % client(env))
 
 
+def edits_files(tool_name):
+    """Whether a tool of Claude Code may have written files: its own edit tools, a shell, or an MCP file tool."""
+    name = str(tool_name or '')
+    return name in EDIT_TOOLS or bool(_MCP_FILE_WRITE.match(name))
+
+
 def skill_paths_in(value, cwd=None):
-    """Skill folders (`…/skills/<name>`) a tool's input names: an edited file's path, or paths in a command or patch."""
+    """Skill folders (`…/skills/<name>`) a tool's input names: an edited file's path, or paths in a command or patch.
+
+    `~` and `$HOME` are read as the home folder, and a relative path as relative to `cwd` (where the tool ran); a
+    command run inside a skill folder counts for that folder even when it names its files without a path."""
+    base = cwd or os.getcwd()
+    command = not isinstance(value, dict) or 'command' in value or 'cmd' in value
     if isinstance(value, dict):
-        named = value.get('file_path') or value.get('path') or value.get('notebook_path')
+        named = [value.get(key) for key in ('file_path', 'path', 'notebook_path', 'destination')]
         text = json.dumps(value, ensure_ascii=False)
     else:
-        named, text = None, str(value or '')
-    paths = []
-    if isinstance(named, str) and named:
-        paths.append(os.path.join(cwd or os.getcwd(), named))
-    paths += _SKILL_PATH.findall(text.replace('\\/', '/'))
+        named, text = [], str(value or '')
+    home = os.path.expanduser('~')
+    text = _HOME_IN_TEXT.sub(lambda _: home, text.replace('\\/', '/'))
+    paths = [os.path.join(base, os.path.expanduser(item)) for item in named if isinstance(item, str) and item]
+    paths += _SKILL_PATH.findall(text)
+    paths += [os.path.normpath(os.path.join(base, item)) for item in _RELATIVE_SKILL_PATH.findall(text)]
+    inside = _SKILL_PATH.match(base.rstrip(os.sep) + os.sep)
+    if command and inside:
+        paths.append(inside.group(1))
     return list(dict.fromkeys(path for path in paths if '%sskills%s' % (os.sep, os.sep) in path))
 
 
-def note_method_edit(env, session_id, paths):
+def note_method_edit(env, session_id, paths, cwd=None):
     """Remember that this session touched these skill paths; `sync_noted_methods` uploads them at the turn's end."""
     if not session_id or not paths:
         return
@@ -3851,14 +3886,16 @@ def note_method_edit(env, session_id, paths):
     entry = edits.get(session_id) or {'paths': []}
     entry['paths'] = list(dict.fromkeys([*entry.get('paths', []), *paths]))[-MAX_NOTED_EDITS:]
     entry['at'] = time.time()
+    if cwd:
+        entry['cwd'] = cwd  # where project skills are looked up when another process syncs these edits
     edits[session_id] = entry
     _write_private(_noted_edits_path(env), edits)
 
 
 def sync_noted_methods(env, session_id, cwd, http=http_json, skip_task=None):
-    """At the end of a turn: sync each installed task whose skill this session edited (one version per turn).
+    """At the end of a turn: sync each task on this computer whose skill this session edited (one version per turn).
 
-    Never raises: a failed sync stays for the task's next start or the hourly refresh, and never affects a check."""
+    Never raises: a failed sync stays for the task's next start or the next local check, and never affects a check."""
     try:
         edits = _read_json(_noted_edits_path(env), {})
         entry = edits.pop(session_id, None) if isinstance(edits, dict) and session_id else None
@@ -3866,13 +3903,85 @@ def sync_noted_methods(env, session_id, cwd, http=http_json, skip_task=None):
             return
         _write_private(_noted_edits_path(env), edits)
         for path in entry.get('paths') or []:
-            sync_installed_methods(env, cwd, http=http, changed_path=path, skip_task=skip_task)
+            sync_installed_methods(env, cwd or entry.get('cwd') or os.getcwd(), http=http, changed_path=path,
+                                   skip_task=skip_task)
     except Exception:
         pass
 
 
+def sync_stale_noted_methods(env, http=http_json, now=None):
+    """Edits a turn noted but never synced, because it was interrupted or its session closed before the turn ended:
+    any later check syncs them once they are `STALE_NOTED_EDITS_SECONDS` old (a turn still working keeps its own)."""
+    edits = _read_json(_noted_edits_path(env), {})
+    if not isinstance(edits, dict):
+        return
+    now = time.time() if now is None else now
+    for session_id, entry in list(edits.items()):
+        if isinstance(entry, dict) and now - float(entry.get('at') or 0) >= STALE_NOTED_EDITS_SECONDS:
+            sync_noted_methods(env, session_id, entry.get('cwd'), http=http)
+
+
+def flush_session_methods(data, env, http=http_json):
+    """The session ends (or a turn is interrupted): skill edits that waited for the turn's end are sent now."""
+    try:
+        sync_active_method(data, env, http=http)
+    except Exception:
+        pass
+    sync_noted_methods(env, data.get('session_id'), data.get('cwd'), http=http,
+                       skip_task=(load_marker(env, data.get('session_id')) or {}).get('task_uuid'))
+
+
+def _method_check_state_path(env):
+    return os.path.join(consolex_home(env), 'method-check-%s.json' % client(env))
+
+
+def check_methods_if_due(env, cwd, http=http_json, now=None):
+    """At a prompt, at most every `METHOD_CHECK_SECONDS`: sync skills changed on this computer outside a turn that
+    syncs them (an editor, `git pull`, another agent, an interrupted turn). Only reading and hashing the skills' files
+    happens every time; the network is used only for a skill whose content changed. Never raises."""
+    try:
+        now = time.time() if now is None else now
+        state = _read_json(_method_check_state_path(env), {})
+        state = state if isinstance(state, dict) else {}
+        if now - float(state.get('at') or 0) < METHOD_CHECK_SECONDS:
+            return False
+        state['at'] = now
+        _write_private(_method_check_state_path(env), state)
+        check_local_methods(env, cwd, http=http)
+        return True
+    except Exception:
+        return False
+
+
+def check_local_methods(env, cwd, http=http_json):
+    """Stale noted edits first, then every task's main skill against the version last synced from here. Also the
+    command `consolex.py methods [cwd]`, which syncs at once."""
+    try:
+        sync_stale_noted_methods(env, http=http)
+    except Exception:
+        pass
+    sync_installed_methods(env, cwd or os.getcwd(), http=http)
+
+
+def _method_task_configs(env):
+    """{task uuid: config} of the tasks this computer has: installed task Skills, then tasks `/consolex:start` loaded."""
+    configs = {}
+    for task_uuid, folder in _installed_skills(env).items():
+        configs[task_uuid] = load_config(os.path.join(skills_dir(env), folder))
+    try:
+        names = os.listdir(_started_root(env))
+    except OSError:
+        names = []
+    for name in names:
+        config = _read_json(os.path.join(_started_root(env), name, 'consolex.json'), None)
+        if isinstance(config, dict) and config.get('task_uuid') and config['task_uuid'] not in configs:
+            configs[config['task_uuid']] = load_config(os.path.join(_started_root(env), name))
+    return configs
+
+
 def sync_installed_methods(env, cwd, http=http_json, changed_path=None, skip_task=None):
-    """Sync an installed task's registered main skill after an edit or an hourly refresh.
+    """Sync the registered main skill of each task on this computer (installed, or loaded by `/consolex:start`) after
+    an edit, a local check or an hourly refresh.
 
     The cache is local to this runtime and skill path. Failed uploads keep the old hash for a retry.
     A file edit only considers tasks that already use that file's skill.
@@ -3881,10 +3990,9 @@ def sync_installed_methods(env, cwd, http=http_json, changed_path=None, skip_tas
     cache = _read_json(path, {})
     cache = cache if isinstance(cache, dict) else {}
     dirty = False
-    for task_uuid, folder in _installed_skills(env).items():
+    for task_uuid, config in _method_task_configs(env).items():
         if task_uuid == skip_task:
             continue
-        config = load_config(os.path.join(skills_dir(env), folder))
         method = config.get('method') or {}
         if _outdated(config) or not method.get('skill'):
             continue
@@ -4080,12 +4188,23 @@ def on_stop(data, env, http=http_json):
         return _report(env, marker, chain, prompt_id, recovery_notice + reason, recovery_notice + user_message(config, result, attempt, link))
     show_receipt = client(env) == 'codex' and result.get('verdict') == 'passed'
     message = user_message(config, result, attempt, link, codex_receipt=show_receipt)
+    note = standard_failed_note(config) if result.get('pending_reason') == 'standard_failed' else None
     return _finish(env, marker, chain, prompt_id, config, recovery_notice + message,
-                   delivery['confirm_items'], ask=not alone, show_receipt=show_receipt)
+                   delivery['confirm_items'], ask=not alone, show_receipt=show_receipt, note=note)
 
 
-def _finish(env, marker, chain, prompt_id, config, message, confirm_items, ask=True, *, show_receipt=False):
-    """Ask about any owner decisions first. Codex records a plain pass as one report-only continuation."""
+def standard_failed_note(config):
+    """What the agent does when its delivery waits for an acceptance standard that failed to generate."""
+    return ('请用一句话告诉负责人：这次交付已记录，但任务的验收标准没能生成，所以还没检查；负责人在上面运行记录链接的页面里重试生成标准后，'
+            '这次交付会自动检查。不要修改或重新交付，然后结束本轮。' if _zh(config) else
+            'Tell the owner in one line: the delivery is recorded but not checked yet, because the task\'s acceptance '
+            'standard failed to generate; retrying the standard on the run page linked above checks this delivery '
+            'automatically. Do not revise or deliver again; then end this turn.')
+
+
+def _finish(env, marker, chain, prompt_id, config, message, confirm_items, ask=True, *, show_receipt=False, note=None):
+    """Ask about any owner decisions first. Codex records a plain pass as one report-only continuation; ``note``
+    sends the agent back once to tell the owner something it must act on (a standard that failed to generate)."""
     marker.pop('awaiting_owner', None)
     if confirm_items and ask:
         return _report(env, marker, chain, prompt_id, confirm_reason(config, message, confirm_items), message)
@@ -4094,6 +4213,8 @@ def _finish(env, marker, chain, prompt_id, config, message, confirm_items, ask=T
         instruction = ('请简短转告上面的验收结果，保留回执中的运行记录链接，然后结束本轮。' if _zh(config) else
                        'Briefly report the result above, including any run link in the receipt, then end this turn.')
         return {'decision': 'block', 'reason': message + '\n\n' + instruction, 'systemMessage': message}
+    if note and ask:
+        return {'decision': 'block', 'reason': message + '\n\n' + note, 'systemMessage': message}
     return {'systemMessage': message}
 
 
@@ -4130,6 +4251,8 @@ def on_check_command(data, env, argument, http=http_json):
             return _context(data, 'ConsoleX: the evidence recheck has no confirmed result yet. Do not create another check. '
                                   'Run history: ' + (_run_link(config, env, result) or recovery['base_link']))
         summary = {key: result.get(key) for key in ('verdict', 'failed', 'needs_review', 'confirm_items', 'judge')}
+        if result.get('pending_reason'):
+            summary['pending_reason'] = result['pending_reason']  # e.g. the standard failed to generate
         summary['run'] = _run_link(config, env, result)
         return _context(data, 'ConsoleX recovered the same check attempt (no new check): ' + json.dumps(summary, ensure_ascii=False))
     message = data.get('last_assistant_message') or transcript_facts(data.get('transcript_path'))[1]
@@ -4148,6 +4271,8 @@ def on_check_command(data, env, argument, http=http_json):
         return _context(data, 'ConsoleX could not check the delivery (%s). Tell the user.' % (
             (result or {}).get('error_msg') or 'HTTP %s' % status))
     summary = {key: result.get(key) for key in ('verdict', 'failed', 'needs_review', 'confirm_items', 'judge')}
+    if result.get('pending_reason'):
+        summary['pending_reason'] = result['pending_reason']  # e.g. the standard failed to generate
     summary['run'] = _run_link(config, env, result)
     return _context(data, 'ConsoleX check result (manual): ' + json.dumps(summary, ensure_ascii=False))
 
@@ -6671,7 +6796,9 @@ def start_task(data, env, argument, http=http_json):
         if status != 200 or not bundle.get('succ'):
             return _context(data, 'ConsoleX could not load "%s" (%s). Tell the user.' % (
                 task['name'], bundle.get('error_msg') or 'HTTP %s' % status)), None
-        task_env = {**env, 'CONSOLEX_SKILLS_DIR': _started_root(env)}
+        # The exported wrapper and ConsoleX supporting skills are private. The owner's main skill lives in the
+        # actual runtime's skill folders, including when this runtime did not originally save the task.
+        task_env = {**env, 'CONSOLEX_SKILLS_DIR': _started_root(env), 'CONSOLEX_OWNER_SKILLS_DIR': skills_dir(env)}
         if client(env) in ('codex', 'claude_code'):
             # Keep only session configuration, not a discoverable or private
             # copy of the task's cx- Skill. Its instructions stay in memory.
@@ -6688,7 +6815,6 @@ def start_task(data, env, argument, http=http_json):
                 _write_private_unique(os.path.join(skill_dir, 'consolex.json'), config)
             except (KeyError, TypeError, ValueError, OSError) as exc:
                 return _context(data, 'ConsoleX could not prepare this task (%s). Do not run it.' % exc), None
-            task_env['CONSOLEX_OWNER_SKILLS_DIR'] = skills_dir(env)
         else:
             _, skill_dir = install_skill(task_env, bundle)
         if not explicit:
@@ -6719,9 +6845,9 @@ def start_task(data, env, argument, http=http_json):
             else:
                 where += (' No ConsoleX task tools or stage checks are configured for this task '
                           '(task="%s" is a private task reference, not a Skill to load).') % os.path.basename(skill_dir)
+    if not activated_marker.get('activation_ready') and (explicit or load_config(skill_dir).get('method')):
+        return activated, None
     if explicit:
-        if not activated_marker.get('activation_ready'):
-            return activated, None
         request_note = ('\n\nThe user\'s request this time: ' + request) if request else ''
         return _context(data, 'ConsoleX started "%s". %s%s\n\n%s' % (task['name'], where, request_note, note.strip())), task
     skill_text = re.sub(r'\A---[ \t]*\r?\n.*?\r?\n---[ \t]*\r?\n', '', private_text if private_text is not None else
@@ -7053,6 +7179,7 @@ def _handle(data, env, http=http_json):
             save_marker(env, marker)
         heartbeat(data, env, http=http)
         sync_active_method(data, env, http=http)
+        check_methods_if_due(env, cwd, http=http)  # skills changed outside a turn that syncs them
         marker, config = _session_config(env, data)
         if marker:
             marker.pop('recovery_overrides', None)
@@ -7086,9 +7213,9 @@ def _handle(data, env, http=http_json):
     if event == 'PostToolUse' and data.get('tool_name') in SCHEDULE_TOOLS:
         return on_schedule_changed(data, env, http=http)
     if event == 'PostToolUse':
-        if data.get('tool_name') in ('Write', 'Edit', 'MultiEdit', 'Bash'):
+        if edits_files(data.get('tool_name')):
             # Only noted here; synced when the turn ends (the task's own skill is checked then too).
-            note_method_edit(env, data.get('session_id'), skill_paths_in(data.get('tool_input') or {}, cwd))
+            note_method_edit(env, data.get('session_id'), skill_paths_in(data.get('tool_input') or {}, cwd), cwd)
             heartbeat(data, env, http=http)
             return None
         tool_input = data.get('tool_input') or {}
@@ -7142,6 +7269,9 @@ if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == 'refresh':
         refresh_installed_tasks(dict(os.environ))
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == 'methods':
+        check_local_methods(dict(os.environ), sys.argv[2] if len(sys.argv) > 2 else os.getcwd())
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == 'schedules':
         reconcile_schedules(dict(os.environ))
         sys.exit(0)
@@ -7149,5 +7279,5 @@ if __name__ == '__main__':
         sys.exit(run_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == 'save':
         sys.exit(save_main(dict(os.environ)))
-    sys.stderr.write('usage: consolex.py hook|poll|refresh|schedules|run|save (hooks read the hook JSON on stdin; run <task words> starts an isolated run; save reads the consolex_save fields as JSON on stdin)\n')
+    sys.stderr.write('usage: consolex.py hook|poll|refresh|methods|schedules|run|save (hooks read the hook JSON on stdin; methods [cwd] syncs skills changed on this computer; run <task words> starts an isolated run; save reads the consolex_save fields as JSON on stdin)\n')
     sys.exit(2)

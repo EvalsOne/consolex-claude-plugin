@@ -8,7 +8,7 @@
       {"matcher": "^mcp__(plugin_consolex_consolex__(consolex_run_task_tool|consolex_start_task)|consolex__(?!consolex_checkpoint$))", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]}
     ],
     "PostToolUse": [
-      {"matcher": "Write|Edit|MultiEdit|Bash", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},
+      {"matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|^mcp__.+__(write_file|edit_file|append_file|move_file|copy_file|create_directory)$", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},
       {"matcher": "Skill", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 200}]},
       {"matcher": "AskUserQuestion", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]},
       {"matcher": "mcp__scheduled-tasks__create_scheduled_task|mcp__scheduled-tasks__update_scheduled_task|mcp__scheduled-tasks__delete_scheduled_task", "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 15}]}
@@ -20,7 +20,7 @@
       {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]}
     ],
     "SessionEnd": [
-      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 10}]}
+      {"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/consolex.py\" hook", "timeout": 30}]}
     ]
   }
 }
